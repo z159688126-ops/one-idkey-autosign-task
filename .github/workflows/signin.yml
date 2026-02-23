@@ -1,0 +1,32 @@
+name: Daily Auto Signin
+
+on:
+  schedule:
+    - cron: '0 1 * * *' # 每天北京时间早上 9 点运行 (1:00 UTC)
+  workflow_dispatch: # 允许您在网页上手动点“运行”测试
+
+jobs:
+  signin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: |
+          npm install playwright axios
+          npx playwright install chromium
+
+      - name: Run signin script
+        env:
+          USER_1: ${{ secrets.USER_1 }}
+          USER_2: ${{ secrets.USER_2 }}
+          PASSWORD: ${{ secrets.PASSWORD }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: node one_idkey_signin.js
