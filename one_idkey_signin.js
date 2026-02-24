@@ -25,13 +25,16 @@ async function notifyTelegram(message) {
 
 async function getPoints(page) {
     try {
-        await page.waitForSelector('#displayStudentPoints', { state: 'visible', timeout: 20000 });
-        return await page.evaluate(() => {
-            return {
-                student: document.getElementById('displayStudentPoints')?.innerText || '0',
-                veteran: document.getElementById('displayVeteranPoints')?.innerText || '0'
-            };
+        // 使用文本内容定位积分，这是最稳的，不受 ID 变化影响
+        const student = await page.evaluate(() => {
+            const el = Array.from(document.querySelectorAll('div, span, p')).find(e => e.innerText.includes('学生积分'));
+            return el ? el.innerText.split(' ').pop() : '0';
         });
+        const veteran = await page.evaluate(() => {
+            const el = Array.from(document.querySelectorAll('div, span, p')).find(e => e.innerText.includes('老兵积分'));
+            return el ? el.innerText.split(' ').pop() : '0';
+        });
+        return { student, veteran };
     } catch (e) {
         return { student: '?', veteran: '?' };
     }
@@ -48,55 +51,41 @@ async function getPoints(page) {
         
         try {
             console.log(`正在登录: ${acc.user}`);
-            await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: 60000 });
+            await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: 90000 });
 
+            // 移除干扰
             await page.evaluate(() => {
                 document.querySelectorAll('#maintenanceOverlay, .modal-backdrop').forEach(el => el.remove());
                 document.body.classList.remove('modal-open', 'scroll-locked');
                 if (typeof openModal === 'function') openModal('login');
             });
 
-            await page.waitForSelector('#loginUser', { state: 'visible', timeout: 15000 });
-            await page.fill('#loginUser', acc.user);
-            await page.fill('#loginPass', acc.pass);
-            await page.click('#authModal .btn-action');
+            await page.waitForSelector('input[type="text"], #loginUser', { state: 'visible', timeout: 20000 });
+            await page.fill('input[type="text"]', acc.user);
+            await page.fill('input[type="password"]', acc.pass);
+            await page.click('button:has-text("登录"), .btn-action');
             
             await page.waitForTimeout(20000); 
 
             const p1 = await getPoints(page);
-            console.log(`${acc.user} 签到前: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`);
+            console.log(`${acc.user} 初始积分: 学生 ${p1.student} | 老兵 ${p1.veteran}`);
 
-            // 精准锁定爸爸图中那个带日历的签到按钮
-            const signinBtn = page.locator('.navbar, header').locator('button, a').filter({ hasText: '签到' }).first();
+            // 精准点击那个带日历图标的“签到”按钮
+            const signinBtn = page.getByRole('button', { name: /签到/ }).first();
             
             if (await signinBtn.isVisible()) {
-                console.log('按钮锁定，开始强制点击流程...');
-                
-                // 1. 模拟真实点击
+                console.log('执行模拟点击...');
                 await signinBtn.click({ force: true, delay: 500 });
                 
-                // 2. 暴力扫射所有确认弹窗（针对 SweetAlert2 等 UI 框架）
-                for (let i = 0; i < 5; i++) {
-                    await page.waitForTimeout(2000);
-                    const modalAction = await page.evaluate(() => {
-                        const confirmBtn = document.querySelector('.swal2-confirm, .confirm, .btn-primary, button.ok');
-                        if (confirmBtn) {
-                            confirmBtn.click();
-                            return true;
-                        }
-                        // 寻找包含特定文本的按钮
-                        const anyOk = Array.from(document.querySelectorAll('button')).find(b => /确定|OK|知道了|提交/.test(b.innerText));
-                        if (anyOk) {
-                            anyOk.click();
-                            return true;
-                        }
-                        return false;
-                    });
-                    if (modalAction) console.log('已强制点击弹窗确认');
-                }
+                // 处理弹窗
+                await page.waitForTimeout(5000);
+                await page.evaluate(() => {
+                    const ok = Array.from(document.querySelectorAll('button, a')).find(el => /确定|OK|知道了|提交/.test(el.innerText));
+                    if (ok) ok.click();
+                });
 
-                // 3. 漫长等待并重载页面
-                await page.waitForTimeout(30000);
+                // 等待并刷新
+                await page.waitForTimeout(25000);
                 await page.reload({ waitUntil: 'networkidle' });
                 await page.waitForTimeout(5000);
                 
@@ -104,17 +93,17 @@ async function getPoints(page) {
 
                 let message = '';
                 if (p1.student !== p2.student || p1.veteran !== p2.veteran) {
-                    message = `[🎊 签到成功] 账号: ${acc.user}\n学生积分: 🎓 ${p1.student} -> ${p2.student}\n老兵积分: 🎖️ ${p1.veteran} -> ${p2.veteran}`;
+                    message = `[🎉 签到成功] 账号: ${acc.user}\n学生积分: 🎓 ${p1.student} -> ${p2.student}\n老兵积分: 🎖️ ${p1.veteran} -> ${p2.veteran}`;
                 } else {
-                    message = `[🔴 积分未跳] 账号: ${acc.user}\n当前积分: 🎓 ${p2.student} | 🎖️ ${p2.veteran}\n提示: 按钮已点且尝试清理弹窗，若仍未变动，请确认今日签到额度。`;
+                    message = `[⚠️ 积分未变] 账号: ${acc.user}\n当前积分: 🎓 ${p2.student} | 🎖️ ${p2.veteran}\n提示: 已尝试点击，若数字没跳，可能是今日额度已签完。`;
                 }
                 await notifyTelegram(message);
             } else {
-                await notifyTelegram(`[⚠️ 未见按钮] 账号: ${acc.user}\n当前积分: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`);
+                await notifyTelegram(`[ℹ️ 未见按钮] 账号: ${acc.user}\n积分: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`);
             }
 
         } catch (e) {
-            await notifyTelegram(`[🚫 脚本错误] 账号: ${acc.user}\n原因: ${e.message}`);
+            await notifyTelegram(`[🚫 报错] 账号: ${acc.user}\n原因: ${e.message}`);
         } finally {
             await page.close();
             await context.close();
