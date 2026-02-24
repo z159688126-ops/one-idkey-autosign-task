@@ -25,7 +25,6 @@ async function notifyTelegram(message) {
 
 async function getPoints(page) {
     try {
-        // 强制等待积分加载
         await page.waitForSelector('#displayStudentPoints', { timeout: 15000 }).catch(() => {});
         return await page.evaluate(() => {
             const student = document.getElementById('displayStudentPoints')?.innerText || '0';
@@ -50,6 +49,7 @@ async function getPoints(page) {
             console.log(`正在登录账号: ${acc.user}`);
             await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: 60000 });
 
+            // 移除干扰
             await page.evaluate(() => {
                 const overlay = document.getElementById('maintenanceOverlay');
                 if (overlay) overlay.remove();
@@ -65,43 +65,56 @@ async function getPoints(page) {
                 if (typeof performLogin === 'function') {
                     performLogin();
                 } else {
-                    document.querySelector('#authModal .btn-action').click();
+                    const btn = document.querySelector('#authModal .btn-action');
+                    if (btn) btn.click();
                 }
             });
 
-            // 登录后多等一会儿
             await page.waitForTimeout(15000);
             const p1 = await getPoints(page);
             console.log(`${acc.user} 签到前: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`);
 
-            // 暴力搜索“签到”按钮
-            const signinBtn = page.locator('button:has-text("签到"), .btn-signin, i.fa-calendar-check').first();
+            // 执行签到
+            console.log('正在执行暴力签到逻辑...');
+            await page.evaluate(async () => {
+                // 1. 尝试直接调用网页内置的签到函数 (如果是这个名字的话)
+                if (typeof userCheckin === 'function') {
+                    await userCheckin();
+                } else if (typeof signin === 'function') {
+                    await signin();
+                }
+                
+                // 2. 模拟点击所有可能的签到按钮
+                const btns = Array.from(document.querySelectorAll('button, a, span')).filter(el => 
+                    el.innerText.includes('签到') || el.classList.contains('btn-signin')
+                );
+                btns.forEach(b => b.click());
+
+                // 3. 处理可能出现的“确认”弹窗
+                const confirmBtns = Array.from(document.querySelectorAll('button')).filter(b => 
+                    b.innerText.includes('确定') || b.innerText.includes('OK') || b.innerText.includes('知道了')
+                );
+                confirmBtns.forEach(b => b.click());
+            });
+
+            // 给服务器反应时间并刷新
+            await page.waitForTimeout(15000);
+            await page.reload({ waitUntil: 'networkidle' });
+            await page.waitForTimeout(5000);
+
+            const p2 = await getPoints(page);
             
             let message = '';
-            const isVisible = await signinBtn.isVisible();
-            
-            if (isVisible) {
-                console.log('发现签到按钮，执行点击...');
-                // 尝试两种点击方式：Playwright 点击和 JS 原生点击
-                await signinBtn.click({ force: true }).catch(() => {});
-                await page.evaluate(() => {
-                    const btn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('签到'));
-                    if (btn) btn.click();
-                });
-
-                // 点击后等待较长时间，并刷新页面以获取最新积分
-                await page.waitForTimeout(15000);
-                await page.reload({ waitUntil: 'networkidle' });
-                await page.waitForTimeout(5000);
-
-                const p2 = await getPoints(page);
-                if (p1.student !== p2.student || p1.veteran !== p2.veteran) {
-                    message = `[签到成功]\n账号: ${acc.user}\n学生积分: 🎓 ${p1.student} -> ${p2.student}\n老兵积分: 🎖️ ${p1.veteran} -> ${p2.veteran}`;
-                } else {
-                    message = `[签到未增益]\n账号: ${acc.user}\n原因: 按钮已点但积分未变，可能已过今日限制或网络延迟\n当前积分: 🎓 ${p2.student} | 🎖️ ${p2.veteran}`;
-                }
+            if (p1.student !== p2.student || p1.veteran !== p2.veteran) {
+                message = `[🎉 签到成功]\n账号: ${acc.user}\n学生积分: 🎓 ${p1.student} -> ${p2.student}\n老兵积分: 🎖️ ${p1.veteran} -> ${p2.veteran}`;
             } else {
-                message = `[今日已签到]\n账号: ${acc.user}\n当前积分: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`;
+                // 如果没变，看看是不是已经签过了
+                const alreadyDone = await page.evaluate(() => document.body.innerText.includes('今日已签到') || document.body.innerText.includes('请明天再来'));
+                if (alreadyDone) {
+                    message = `[今日已签到]\n账号: ${acc.user}\n当前积分: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`;
+                } else {
+                    message = `[签到未生效]\n账号: ${acc.user}\n提示: 已尝试暴力签到但积分未涨，可能是今日额度已满或需要手动验证。`;
+                }
             }
 
             console.log(message);
@@ -109,7 +122,7 @@ async function getPoints(page) {
 
         } catch (e) {
             console.error(`${acc.user} 出错: ${e.message}`);
-            await notifyTelegram(`[签到异常]\n账号: ${acc.user}\n原因: ${e.message}`);
+            await notifyTelegram(`[异常报告]\n账号: ${acc.user}\n原因: ${e.message}`);
         } finally {
             await page.close();
             await context.close();
