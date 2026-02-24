@@ -49,68 +49,57 @@ async function getPoints(page) {
             console.log(`正在登录账号: ${acc.user}`);
             await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: 60000 });
 
-            // 移除干扰并触发登录
+            // 1. 强力清场：移除所有遮罩和锁定
             await page.evaluate(() => {
-                const overlay = document.getElementById('maintenanceOverlay');
-                if (overlay) overlay.remove();
-                document.body.classList.remove('scroll-locked');
+                document.querySelectorAll('#maintenanceOverlay, .modal-backdrop, .fade.show').forEach(el => el.remove());
+                document.body.classList.remove('modal-open', 'scroll-locked');
                 if (typeof openModal === 'function') openModal('login');
             });
 
             await page.waitForSelector('#loginUser', { state: 'visible', timeout: 15000 });
             await page.fill('#loginUser', acc.user);
             await page.fill('#loginPass', acc.pass);
-            
-            // 点击登录并等待
             await page.click('#authModal .btn-action');
-            await page.waitForTimeout(20000); // 登录后的关键等待
+            
+            // 登录后的缓冲
+            await page.waitForTimeout(20000); 
 
             const p1 = await getPoints(page);
             console.log(`${acc.user} 签到前: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`);
 
-            // 像人一样定位并点击签到
-            // 按钮特征：包含 fa-calendar-check 图标的按钮
+            // 2. 定位那个带日历的按钮
             const signinBtn = page.locator('button:has(i.fa-calendar-check), .btn-signin, button:has-text("签到")').first();
             
-            let message = '';
             if (await signinBtn.isVisible()) {
-                console.log('按钮可见，模拟人手点击...');
-                // 模拟鼠标悬停、按下、延迟后松开
-                await signinBtn.hover();
-                await page.waitForTimeout(1000);
-                await signinBtn.click({ delay: 500, force: true });
+                console.log('执行模拟点击...');
+                await signinBtn.click({ force: true, delay: 200 });
                 
-                // 疯狂处理可能出现的确认弹窗
-                await page.waitForTimeout(3000);
+                // 3. 关键：等待并点击弹出的“确定”按钮
+                await page.waitForTimeout(5000);
                 await page.evaluate(() => {
-                    const okBtns = Array.from(document.querySelectorAll('button')).filter(b => /确定|OK|知道了/.test(b.innerText));
-                    okBtns.forEach(b => b.click());
+                    const btns = Array.from(document.querySelectorAll('button, a.btn'));
+                    const okBtn = btns.find(b => /确定|OK|知道了|提交/.test(b.innerText));
+                    if (okBtn) okBtn.click();
                 });
 
-                // 点完后死等 30 秒，不准刷新，给服务器加载时间
-                console.log('等待积分同步...');
-                await page.waitForTimeout(30000);
-                
-                // 刷新一下页面再抓
+                // 4. 点完等积分同步
+                await page.waitForTimeout(25000);
                 await page.reload({ waitUntil: 'networkidle' });
-                await page.waitForTimeout(5000);
                 const p2 = await getPoints(page);
 
+                let message = '';
                 if (p1.student !== p2.student || p1.veteran !== p2.veteran) {
-                    message = `[✅ 签到成功]\n账号: ${acc.user}\n学生积分: 🎓 ${p1.student} -> ${p2.student}\n老兵积分: 🎖️ ${p1.veteran} -> ${p2.veteran}`;
+                    message = `[✅ 签到成功]\n账号: ${acc.user}\n积分: 🎓 ${p1.student} -> ${p2.student} | 🎖️ ${p1.veteran} -> ${p2.veteran}`;
                 } else {
-                    message = `[⚠️ 签到无变动]\n账号: ${acc.user}\n原因: 按钮已点但分没涨。可能今天已经签过了。\n当前积分: 🎓 ${p2.student} | 🎖️ ${p2.veteran}`;
+                    message = `[⚠️ 状态更新]\n账号: ${acc.user}\n可能今日已签过，积分未变动。\n当前: 🎓 ${p2.student} | 🎖️ ${p2.veteran}`;
                 }
+                await notifyTelegram(message);
             } else {
-                message = `[ℹ️ 已签到/未找到按钮]\n账号: ${acc.user}\n积分: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`;
+                await notifyTelegram(`[ℹ️ 未找到按钮]\n账号: ${acc.user}\n积分: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`);
             }
 
-            console.log(message);
-            await notifyTelegram(message);
-
         } catch (e) {
-            console.error(`${acc.user} 出错: ${e.message}`);
-            await notifyTelegram(`[❌ 异常]\n账号: ${acc.user}\n原因: ${e.message}`);
+            await notifyTelegram(`[❌ 错误]\n账号: ${acc.user}\n原因: ${e.message}`);
         } finally {
             await page.close();
             await context.close();
