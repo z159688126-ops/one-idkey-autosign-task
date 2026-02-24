@@ -25,7 +25,7 @@ async function notifyTelegram(message) {
 
 async function getPoints(page) {
     try {
-        await page.waitForSelector('#displayStudentPoints', { timeout: 15000 }).catch(() => {});
+        await page.waitForSelector('#displayStudentPoints', { timeout: 20000 }).catch(() => {});
         return await page.evaluate(() => {
             const student = document.getElementById('displayStudentPoints')?.innerText || '0';
             const veteran = document.getElementById('displayVeteranPoints')?.innerText || '0';
@@ -49,7 +49,7 @@ async function getPoints(page) {
             console.log(`正在登录账号: ${acc.user}`);
             await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: 60000 });
 
-            // 移除干扰
+            // 移除干扰并触发登录
             await page.evaluate(() => {
                 const overlay = document.getElementById('maintenanceOverlay');
                 if (overlay) overlay.remove();
@@ -61,60 +61,48 @@ async function getPoints(page) {
             await page.fill('#loginUser', acc.user);
             await page.fill('#loginPass', acc.pass);
             
-            await page.evaluate(() => {
-                if (typeof performLogin === 'function') {
-                    performLogin();
-                } else {
-                    const btn = document.querySelector('#authModal .btn-action');
-                    if (btn) btn.click();
-                }
-            });
+            // 点击登录并等待
+            await page.click('#authModal .btn-action');
+            await page.waitForTimeout(20000); // 登录后的关键等待
 
-            await page.waitForTimeout(15000);
             const p1 = await getPoints(page);
             console.log(`${acc.user} 签到前: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`);
 
-            // 执行签到
-            console.log('正在执行暴力签到逻辑...');
-            await page.evaluate(async () => {
-                // 1. 尝试直接调用网页内置的签到函数 (如果是这个名字的话)
-                if (typeof userCheckin === 'function') {
-                    await userCheckin();
-                } else if (typeof signin === 'function') {
-                    await signin();
-                }
-                
-                // 2. 模拟点击所有可能的签到按钮
-                const btns = Array.from(document.querySelectorAll('button, a, span')).filter(el => 
-                    el.innerText.includes('签到') || el.classList.contains('btn-signin')
-                );
-                btns.forEach(b => b.click());
-
-                // 3. 处理可能出现的“确认”弹窗
-                const confirmBtns = Array.from(document.querySelectorAll('button')).filter(b => 
-                    b.innerText.includes('确定') || b.innerText.includes('OK') || b.innerText.includes('知道了')
-                );
-                confirmBtns.forEach(b => b.click());
-            });
-
-            // 给服务器反应时间并刷新
-            await page.waitForTimeout(15000);
-            await page.reload({ waitUntil: 'networkidle' });
-            await page.waitForTimeout(5000);
-
-            const p2 = await getPoints(page);
+            // 像人一样定位并点击签到
+            // 按钮特征：包含 fa-calendar-check 图标的按钮
+            const signinBtn = page.locator('button:has(i.fa-calendar-check), .btn-signin, button:has-text("签到")').first();
             
             let message = '';
-            if (p1.student !== p2.student || p1.veteran !== p2.veteran) {
-                message = `[🎉 签到成功]\n账号: ${acc.user}\n学生积分: 🎓 ${p1.student} -> ${p2.student}\n老兵积分: 🎖️ ${p1.veteran} -> ${p2.veteran}`;
-            } else {
-                // 如果没变，看看是不是已经签过了
-                const alreadyDone = await page.evaluate(() => document.body.innerText.includes('今日已签到') || document.body.innerText.includes('请明天再来'));
-                if (alreadyDone) {
-                    message = `[今日已签到]\n账号: ${acc.user}\n当前积分: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`;
+            if (await signinBtn.isVisible()) {
+                console.log('按钮可见，模拟人手点击...');
+                // 模拟鼠标悬停、按下、延迟后松开
+                await signinBtn.hover();
+                await page.waitForTimeout(1000);
+                await signinBtn.click({ delay: 500, force: true });
+                
+                // 疯狂处理可能出现的确认弹窗
+                await page.waitForTimeout(3000);
+                await page.evaluate(() => {
+                    const okBtns = Array.from(document.querySelectorAll('button')).filter(b => /确定|OK|知道了/.test(b.innerText));
+                    okBtns.forEach(b => b.click());
+                });
+
+                // 点完后死等 30 秒，不准刷新，给服务器加载时间
+                console.log('等待积分同步...');
+                await page.waitForTimeout(30000);
+                
+                // 刷新一下页面再抓
+                await page.reload({ waitUntil: 'networkidle' });
+                await page.waitForTimeout(5000);
+                const p2 = await getPoints(page);
+
+                if (p1.student !== p2.student || p1.veteran !== p2.veteran) {
+                    message = `[✅ 签到成功]\n账号: ${acc.user}\n学生积分: 🎓 ${p1.student} -> ${p2.student}\n老兵积分: 🎖️ ${p1.veteran} -> ${p2.veteran}`;
                 } else {
-                    message = `[签到未生效]\n账号: ${acc.user}\n提示: 已尝试暴力签到但积分未涨，可能是今日额度已满或需要手动验证。`;
+                    message = `[⚠️ 签到无变动]\n账号: ${acc.user}\n原因: 按钮已点但分没涨。可能今天已经签过了。\n当前积分: 🎓 ${p2.student} | 🎖️ ${p2.veteran}`;
                 }
+            } else {
+                message = `[ℹ️ 已签到/未找到按钮]\n账号: ${acc.user}\n积分: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`;
             }
 
             console.log(message);
@@ -122,7 +110,7 @@ async function getPoints(page) {
 
         } catch (e) {
             console.error(`${acc.user} 出错: ${e.message}`);
-            await notifyTelegram(`[异常报告]\n账号: ${acc.user}\n原因: ${e.message}`);
+            await notifyTelegram(`[❌ 异常]\n账号: ${acc.user}\n原因: ${e.message}`);
         } finally {
             await page.close();
             await context.close();
