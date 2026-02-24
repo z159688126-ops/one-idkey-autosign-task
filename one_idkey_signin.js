@@ -25,7 +25,8 @@ async function notifyTelegram(message) {
 
 async function getPoints(page) {
     try {
-        await page.waitForSelector('#displayStudentPoints', { timeout: 10000 }).catch(() => {});
+        // 强制等待积分加载
+        await page.waitForSelector('#displayStudentPoints', { timeout: 15000 }).catch(() => {});
         return await page.evaluate(() => {
             const student = document.getElementById('displayStudentPoints')?.innerText || '0';
             const veteran = document.getElementById('displayVeteranPoints')?.innerText || '0';
@@ -68,22 +69,37 @@ async function getPoints(page) {
                 }
             });
 
+            // 登录后多等一会儿
             await page.waitForTimeout(15000);
             const p1 = await getPoints(page);
             console.log(`${acc.user} 签到前: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`);
 
-            // 关键修复：精确定位老兵积分后面的签到按钮
-            // 按钮就在 #displayVeteranPoints 的父元素或兄弟元素中
-            const signinBtn = page.locator('#displayVeteranPoints + button, #displayVeteranPoints ~ button, button:has(i.fa-calendar-check), .btn-signin').first();
+            // 暴力搜索“签到”按钮
+            const signinBtn = page.locator('button:has-text("签到"), .btn-signin, i.fa-calendar-check').first();
             
             let message = '';
-            if (await signinBtn.isVisible()) {
-                console.log('执行签到...');
-                // 强制点击，防止被遮挡
-                await signinBtn.click({ force: true });
-                await page.waitForTimeout(10000); 
+            const isVisible = await signinBtn.isVisible();
+            
+            if (isVisible) {
+                console.log('发现签到按钮，执行点击...');
+                // 尝试两种点击方式：Playwright 点击和 JS 原生点击
+                await signinBtn.click({ force: true }).catch(() => {});
+                await page.evaluate(() => {
+                    const btn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('签到'));
+                    if (btn) btn.click();
+                });
+
+                // 点击后等待较长时间，并刷新页面以获取最新积分
+                await page.waitForTimeout(15000);
+                await page.reload({ waitUntil: 'networkidle' });
+                await page.waitForTimeout(5000);
+
                 const p2 = await getPoints(page);
-                message = `[签到成功]\n账号: ${acc.user}\n学生积分: 🎓 ${p1.student} -> ${p2.student}\n老兵积分: 🎖️ ${p1.veteran} -> ${p2.veteran}`;
+                if (p1.student !== p2.student || p1.veteran !== p2.veteran) {
+                    message = `[签到成功]\n账号: ${acc.user}\n学生积分: 🎓 ${p1.student} -> ${p2.student}\n老兵积分: 🎖️ ${p1.veteran} -> ${p2.veteran}`;
+                } else {
+                    message = `[签到未增益]\n账号: ${acc.user}\n原因: 按钮已点但积分未变，可能已过今日限制或网络延迟\n当前积分: 🎓 ${p2.student} | 🎖️ ${p2.veteran}`;
+                }
             } else {
                 message = `[今日已签到]\n账号: ${acc.user}\n当前积分: 🎓 ${p1.student} | 🎖️ ${p1.veteran}`;
             }
