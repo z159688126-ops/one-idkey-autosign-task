@@ -1,9 +1,8 @@
 name: Daily Auto Signin
-
 on:
   schedule:
-    - cron: '0 1 * * *' # 每天北京时间早上 9 点运行 (1:00 UTC)
-  workflow_dispatch: # 允许您在网页上手动点“运行”测试
+    - cron: '0 1 * * *'
+  workflow_dispatch:
 
 jobs:
   signin:
@@ -15,7 +14,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
+          node-version: '20'
 
       - name: Install dependencies
         run: |
