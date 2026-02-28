@@ -1,15 +1,25 @@
 const { chromium } = require('playwright');
 const axios = require('axios');
 
+// 核心：优先从 GitHub 环境变量读取，如果没有则使用爸爸留下的默认值
 const CONFIG = {
     url: 'https://one.idkey.cc/',
     accounts: [
-        { username: 'z159688126@gmail.com', password: 'Zengfei521.' },
-        { username: 'zz159688126@gmail.com', password: 'Zengfei521.' },
-        { username: 'zengfei19880126@gmail.com', password: 'Zengfei521.' }
+        { 
+            username: process.env.USER_1 || 'z159688126@gmail.com', 
+            password: process.env.PASSWORD || 'Zengfei521.' 
+        },
+        { 
+            username: process.env.USER_2 || 'zz159688126@gmail.com', 
+            password: process.env.PASSWORD || 'Zengfei521.' 
+        },
+        { 
+            username: process.env.USER_3 || 'zengfei19880126@gmail.com', 
+            password: process.env.PASSWORD || 'Zengfei521.' 
+        }
     ],
-    botToken: '8363698033:AAFZqLYnxczqngwJIU-XqnLk7gaVwAK9hZQ',
-    chatId: '5677672165'
+    botToken: process.env.BOT_TOKEN || '8363698033:AAFZqLYnxczqngwJIU-XqnLk7gaVwAK9hZQ',
+    chatId: process.env.CHAT_ID || '5677672165'
 };
 
 function now() {
@@ -31,20 +41,13 @@ async function getPoints(page) {
     try {
         await page.waitForTimeout(5000); 
         const stats = await page.evaluate(() => {
-            // 针对 one.idkey.cc 的特定图标选择器
-            // 🎓 是学生积分图标，🎖️ 是老兵积分图标
             const getScore = (iconClass) => {
                 const icon = document.querySelector(`i.${iconClass}`);
-                if (icon && icon.parentElement) {
-                    return icon.parentElement.innerText.trim();
-                }
-                // 备选：如果找不到类名，找包含图标的元素
+                if (icon && icon.parentElement) return icon.parentElement.innerText.trim();
                 return '0';
             };
-
             const s = getScore('fa-graduation-cap') || '0';
             const v = getScore('fa-medal') || '0';
-            
             return { s, v };
         });
         return stats;
@@ -57,6 +60,8 @@ async function getPoints(page) {
     const browser = await chromium.launch({ headless: true });
 
     for (const acc of CONFIG.accounts) {
+        if (!acc.username || acc.username === 'undefined') continue;
+        
         const context = await browser.newContext({
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
         });
@@ -69,12 +74,12 @@ async function getPoints(page) {
             await page.evaluate(() => {
                 const overlay = document.getElementById('maintenanceOverlay');
                 if (overlay) overlay.remove();
-                document.body.style.overflow = 'auto'; // 恢复滚动
+                document.body.style.overflow = 'auto';
             });
 
-            // 登录 - 增加到 60 秒等待，防止网络慢导致超时
+            // 登录
             const loginBtn = page.locator('button:has-text("登录"), .btn-login').filter({ visible: true }).first();
-            await loginBtn.waitFor({ state: 'visible', timeout: 60000 });
+            await loginBtn.waitFor({ state: 'visible', timeout: 30000 });
             await loginBtn.click();
 
             await page.fill('input[placeholder*="用户名"], input[placeholder*="邮箱"], input[type="text"]', acc.username);
@@ -85,9 +90,7 @@ async function getPoints(page) {
 
             const before = await getPoints(page);
 
-            // 寻找签到按钮并点击
             const signinBtn = page.locator('button:has-text("签到"), a:has-text("签到")').filter({ visible: true }).first();
-            
             if (await signinBtn.count() > 0) {
                 await signinBtn.click({ force: true });
                 await page.waitForTimeout(5000);
