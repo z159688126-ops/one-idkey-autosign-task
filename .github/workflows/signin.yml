@@ -1,32 +1,29 @@
-name: Daily Auto Signin
+name: One Idkey Signin
+
 on:
   schedule:
-    - cron: '0 1 * * *'
-  workflow_dispatch:
+    - cron: '0 1 * * *' # 每天 UTC 1:00 (北京时间 9:00)
+  workflow_dispatch: # 支持手动触发
 
 jobs:
   signin:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install dependencies
         run: |
+          npm init -y
           npm install playwright axios
-          npx playwright install chromium
 
-      - name: Run signin script
-        env:
-          USER_1: ${{ secrets.USER_1 }}
-          USER_2: ${{ secrets.USER_2 }}
-          USER_3: ${{ secrets.USER_3 }}
-          PASSWORD: ${{ secrets.PASSWORD }}
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
+      - name: Install Playwright Browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run Signin Script
         run: node one_idkey_signin.js
