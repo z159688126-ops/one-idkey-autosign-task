@@ -5,12 +5,14 @@ const accountNames = Array.from({ length: 10 }, (_, i) => process.env[`USER_${i 
   (u) => u && u !== 'undefined'
 );
 
+const passwordFor = (username) =>
+  username === 'zengfei19880126@gmail.com'
+    ? (process.env.PASSWORD_SPECIAL || 'Zengfei521.Zengfei521.')
+    : (process.env.PASSWORD || 'Zengfei521.');
+
 const CONFIG = {
   url: 'https://one.idkey.cc/',
-  accounts: accountNames.map((username) => ({
-    username,
-    password: process.env.PASSWORD || 'Zengfei521.'
-  })),
+  accounts: accountNames.map((username) => ({ username, password: passwordFor(username) })),
   botToken: process.env.BOT_TOKEN,
   chatId: process.env.CHAT_ID
 };
@@ -24,13 +26,15 @@ async function notifyTelegram(message) {
     throw new Error('缺少 BOT_TOKEN 或 CHAT_ID');
   }
 
-  await axios.post(`https://api.telegram.org/bot${CONFIG.botToken}/sendMessage`, {
-    chat_id: CONFIG.chatId,
-    text: message,
-    disable_web_page_preview: true
-  }, {
-    timeout: 30000
-  });
+  await axios.post(
+    `https://api.telegram.org/bot${CONFIG.botToken}/sendMessage`,
+    {
+      chat_id: CONFIG.chatId,
+      text: message,
+      disable_web_page_preview: true
+    },
+    { timeout: 30000 }
+  );
 }
 
 async function safeNotify(message) {
@@ -44,18 +48,121 @@ async function safeNotify(message) {
 
 async function getPoints(page) {
   try {
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(3000);
     return await page.evaluate(() => {
-      const getScore = (iconClass) => {
-        const icon = document.querySelector(`i.${iconClass}`);
-        if (icon && icon.parentElement) return icon.parentElement.innerText.trim();
-        return '0';
+      const byIdStudent = document.getElementById('displayStudentPoints')?.innerText?.trim();
+      const byIdVeteran = document.getElementById('displayVeteranPoints')?.innerText?.trim();
+
+      const byText = (keyword) => {
+        const el = Array.from(document.querySelectorAll('div, span, p, strong, small')).find(
+          (e) => (e.innerText || '').includes(keyword)
+        );
+        if (!el) return null;
+        const text = el.innerText.replace(/\s+/g, ' ').trim();
+        const match = text.match(/(\d+(?:\.\d+)?)/g);
+        return match ? match[match.length - 1] : null;
       };
-      return { s: getScore('fa-graduation-cap'), v: getScore('fa-medal') };
+
+      return {
+        s: byIdStudent || byText('学生积分') || '0',
+        v: byIdVeteran || byText('老兵积分') || '0'
+      };
     });
   } catch {
-    return { s: '0', v: '0' };
+    return { s: '?', v: '?' };
   }
+}
+
+async function openLogin(page) {
+  await page.evaluate(() => {
+    document.querySelectorAll('#maintenanceOverlay, .modal-backdrop').forEach((el) => el.remove());
+    document.body.classList.remove('modal-open', 'scroll-locked');
+    document.body.style.overflow = 'auto';
+
+    if (typeof openModal === 'function') {
+      try { openModal('login'); } catch {}
+    }
+
+    const candidates = Array.from(document.querySelectorAll('button, a, div'));
+    const loginEl = candidates.find((el) => /登录|登入/.test((el.innerText || '').trim()));
+    if (loginEl) loginEl.click();
+  });
+
+  const userSelectors = ['#loginUser', 'input[placeholder*="用户名"]', 'input[placeholder*="邮箱"]', 'input[type="text"]'];
+  for (const sel of userSelectors) {
+    const loc = page.locator(sel).first();
+    if (await loc.count()) {
+      try {
+        await loc.waitFor({ state: 'visible', timeout: 8000 });
+        return;
+      } catch {}
+    }
+  }
+
+  throw new Error('登录弹窗未成功打开');
+}
+
+async function login(page, acc) {
+  await openLogin(page);
+
+  const userField = page.locator('#loginUser, input[placeholder*="用户名"], input[placeholder*="邮箱"], input[type="text"]').first();
+  const passField = page.locator('#loginPass, input[type="password"]').first();
+
+  await userField.fill(acc.username);
+  await passField.fill(acc.password);
+
+  const submit = page.locator('#authModal .btn-action, button:has-text("登录系统"), button:has-text("登录"), .btn-action').first();
+  if (await submit.count()) {
+    await submit.click({ force: true }).catch(() => {});
+  }
+
+  await page.evaluate(() => {
+    if (typeof performLogin === 'function') {
+      try { performLogin(); } catch {}
+    }
+  });
+
+  await page.waitForTimeout(12000);
+}
+
+async function clickSignin(page) {
+  const selectors = [
+    '#displayVeteranPoints + button',
+    '#displayVeteranPoints ~ button',
+    'button:has(i.fa-calendar-check)',
+    'a:has(i.fa-calendar-check)',
+    'button:has-text("签到")',
+    'a:has-text("签到")',
+    '.btn-signin'
+  ];
+
+  for (const sel of selectors) {
+    const loc = page.locator(sel).first();
+    if (await loc.count()) {
+      try {
+        if (await loc.isVisible()) {
+          await loc.click({ force: true, delay: 200 });
+          return true;
+        }
+      } catch {}
+    }
+  }
+
+  const clicked = await page.evaluate(() => {
+    const candidates = Array.from(document.querySelectorAll('button, a, div'));
+    const el = candidates.find((node) => {
+      const text = (node.innerText || '').trim();
+      const html = node.innerHTML || '';
+      return /签到/.test(text) || /fa-calendar-check/.test(html);
+    });
+    if (el) {
+      el.click();
+      return true;
+    }
+    return false;
+  });
+
+  return clicked;
 }
 
 function buildSummary(results, startedAt) {
@@ -73,7 +180,7 @@ function buildSummary(results, startedAt) {
   if (ok.length) {
     lines.push('✅ 成功账号');
     for (const item of ok) {
-      lines.push(`- ${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v}`);
+      lines.push(`- ${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
     }
     lines.push('');
   }
@@ -109,32 +216,28 @@ function buildSummary(results, startedAt) {
 
       try {
         console.log(`正在为账号 ${acc.username} 执行签到...`);
-        await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: 60000 });
-
-        await page.evaluate(() => {
-          const overlay = document.getElementById('maintenanceOverlay');
-          if (overlay) overlay.remove();
-          document.body.style.overflow = 'auto';
-        });
-
-        const loginBtn = page.locator('button:has-text("登录"), .btn-login').filter({ visible: true }).first();
-        await loginBtn.waitFor({ state: 'visible', timeout: 30000 });
-        await loginBtn.click();
-
-        await page.fill('input[placeholder*="用户名"], input[placeholder*="邮箱"], input[type="text"]', acc.username);
-        await page.fill('input[type="password"]', acc.password);
-        await page.click('button:has-text("登录系统")');
-        await page.waitForTimeout(10000);
+        await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: 90000 });
+        await login(page, acc);
 
         const before = await getPoints(page);
-        const signinBtn = page.locator('button:has-text("签到"), a:has-text("签到")').filter({ visible: true }).first();
-        if (await signinBtn.count() > 0) {
-          await signinBtn.click({ force: true });
+        const clicked = await clickSignin(page);
+
+        await page.waitForTimeout(clicked ? 12000 : 5000);
+        if (clicked) {
+          await page.evaluate(() => {
+            const ok = Array.from(document.querySelectorAll('button, a')).find((el) => /确定|OK|知道了|提交/.test(el.innerText || ''));
+            if (ok) ok.click();
+          }).catch(() => {});
+          await page.waitForTimeout(3000);
+          await page.reload({ waitUntil: 'networkidle', timeout: 90000 }).catch(() => {});
           await page.waitForTimeout(5000);
         }
 
         const after = await getPoints(page);
-        results.push({ ok: true, username: acc.username, before, after });
+        const changed = before.s !== after.s || before.v !== after.v;
+        const note = clicked ? (changed ? '积分已变化' : '已点击签到但积分未变化') : '未见签到按钮，可能今日已签';
+
+        results.push({ ok: true, username: acc.username, before, after, note });
       } catch (error) {
         console.error(`${acc.username} 失败:`, error.message);
         results.push({ ok: false, username: acc.username, error: error.message });
