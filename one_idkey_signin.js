@@ -166,32 +166,34 @@ async function clickSignin(page) {
 }
 
 function buildSummary(results, startedAt) {
-  const ok = results.filter((r) => r.ok);
-  const fail = results.filter((r) => !r.ok);
+  const success = results.filter((r) => r.status === 'success');
+  const retrySuccess = results.filter((r) => r.status === 'retry-success');
+  const uncertain = results.filter((r) => r.status === 'uncertain');
+  const fail = results.filter((r) => r.status === 'failed');
   const lines = [
     '[GitHub 签到汇总]',
     `时间: ${startedAt}`,
     `账户数: ${results.length}/10`,
-    `成功: ${ok.length}`,
+    `成功: ${success.length}`,
+    `补签成功: ${retrySuccess.length}`,
+    `异常: ${uncertain.length}`,
     `失败: ${fail.length}`,
     ''
   ];
 
-  if (ok.length) {
-    lines.push('✅ 成功账号');
-    ok.forEach((item, index) => {
-      lines.push(`${index + 1}. ${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
+  const pushGroup = (title, items, formatter) => {
+    if (!items.length) return;
+    lines.push(title);
+    items.forEach((item, index) => {
+      lines.push(`${index + 1}. ${formatter(item)}`);
       lines.push('');
     });
-  }
+  };
 
-  if (fail.length) {
-    lines.push('❌ 失败账号');
-    fail.forEach((item, index) => {
-      lines.push(`${index + 1}. ${item.username} | ${item.error}`);
-      lines.push('');
-    });
-  }
+  pushGroup('✅ 成功账号', success, (item) => `${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
+  pushGroup('🔁 重试后成功', retrySuccess, (item) => `${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
+  pushGroup('⚠️ 异常账号', uncertain, (item) => `${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
+  pushGroup('❌ 失败账号', fail, (item) => `${item.username} | ${item.error}`);
 
   return lines.join('\n').trim();
 }
@@ -207,43 +209,71 @@ function buildSummary(results, startedAt) {
   const browser = await chromium.launch({ headless: true });
   const results = [];
 
+  async function runOneAccount(acc, attempt = 1) {
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    });
+    const page = await context.newPage();
+
+    try {
+      console.log(`正在为账号 ${acc.username} 执行签到... attempt=${attempt}`);
+      await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: 90000 });
+      await login(page, acc);
+
+      const before = await getPoints(page);
+      const clicked = await clickSignin(page);
+
+      await page.waitForTimeout(clicked ? 12000 : 5000);
+      if (clicked) {
+        await page.evaluate(() => {
+          const ok = Array.from(document.querySelectorAll('button, a')).find((el) => /确定|OK|知道了|提交/.test(el.innerText || ''));
+          if (ok) ok.click();
+        }).catch(() => {});
+        await page.waitForTimeout(3000);
+        await page.reload({ waitUntil: 'networkidle', timeout: 90000 }).catch(() => {});
+        await page.waitForTimeout(5000);
+      }
+
+      const after = await getPoints(page);
+      const changed = before.s !== after.s || before.v !== after.v;
+
+      let status = 'uncertain';
+      let note = '未见签到按钮，可能今日已签';
+
+      if (clicked && changed) {
+        status = attempt === 1 ? 'success' : 'retry-success';
+        note = attempt === 1 ? '积分已变化' : '重试后积分已变化';
+      } else if (clicked && !changed) {
+        note = '已点击签到但积分未变化';
+      }
+
+      return { status, username: acc.username, before, after, note, clicked, changed, attempt };
+    } finally {
+      await page.close();
+      await context.close();
+    }
+  }
+
   try {
     for (const acc of CONFIG.accounts) {
-      const context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-      });
-      const page = await context.newPage();
-
       try {
-        console.log(`正在为账号 ${acc.username} 执行签到...`);
-        await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: 90000 });
-        await login(page, acc);
+        let result = await runOneAccount(acc, 1);
 
-        const before = await getPoints(page);
-        const clicked = await clickSignin(page);
-
-        await page.waitForTimeout(clicked ? 12000 : 5000);
-        if (clicked) {
-          await page.evaluate(() => {
-            const ok = Array.from(document.querySelectorAll('button, a')).find((el) => /确定|OK|知道了|提交/.test(el.innerText || ''));
-            if (ok) ok.click();
-          }).catch(() => {});
-          await page.waitForTimeout(3000);
-          await page.reload({ waitUntil: 'networkidle', timeout: 90000 }).catch(() => {});
-          await page.waitForTimeout(5000);
+        if (result.status === 'uncertain') {
+          console.log(`${acc.username} 首次结果不确定，开始自动重试一次...`);
+          await new Promise((resolve) => setTimeout(resolve, 4000));
+          const retryResult = await runOneAccount(acc, 2);
+          result = retryResult.status === 'retry-success' ? retryResult : {
+            ...retryResult,
+            status: retryResult.status === 'success' ? 'retry-success' : 'uncertain',
+            note: retryResult.changed ? '重试后积分已变化' : '重试后仍未见积分变化/按钮'
+          };
         }
 
-        const after = await getPoints(page);
-        const changed = before.s !== after.s || before.v !== after.v;
-        const note = clicked ? (changed ? '积分已变化' : '已点击签到但积分未变化') : '未见签到按钮，可能今日已签';
-
-        results.push({ ok: true, username: acc.username, before, after, note });
+        results.push(result);
       } catch (error) {
         console.error(`${acc.username} 失败:`, error.message);
-        results.push({ ok: false, username: acc.username, error: error.message });
-      } finally {
-        await page.close();
-        await context.close();
+        results.push({ status: 'failed', username: acc.username, error: error.message });
       }
     }
   } finally {
@@ -253,8 +283,9 @@ function buildSummary(results, startedAt) {
   const summary = buildSummary(results, startedAt);
   await safeNotify(summary);
 
-  const failedCount = results.filter((r) => !r.ok).length;
-  if (failedCount > 0) {
-    throw new Error(`签到存在失败账号：${failedCount}`);
+  const failedCount = results.filter((r) => r.status === 'failed').length;
+  const uncertainCount = results.filter((r) => r.status === 'uncertain').length;
+  if (failedCount > 0 || uncertainCount > 0) {
+    throw new Error(`签到存在异常账号：failed=${failedCount}, uncertain=${uncertainCount}`);
   }
 })();
