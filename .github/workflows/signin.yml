@@ -5,6 +5,10 @@ on:
     - cron: '25 1 * * *' # GitHub cron 有漂移，设为 UTC 01:25（北京时间约 09:25+）
   workflow_dispatch:
 
+concurrency:
+  group: one-idkey-signin
+  cancel-in-progress: true
+
 jobs:
   signin:
     runs-on: ubuntu-latest
