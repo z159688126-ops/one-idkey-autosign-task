@@ -93,9 +93,8 @@ function buildSummary(results, startedAt) {
   const startedAt = now();
 
   if (CONFIG.accounts.length !== 10) {
-    const msg = `[GitHub 签到异常]\n时间: ${startedAt}\n当前只配置了 ${CONFIG.accounts.length}/10 个账号\n缺少的 Secrets: ${Array.from({ length: 10 }, (_, i) => `USER_${i + 1}`).filter((k) => !process.env[k]).join(', ')}`;
+    const msg = `[GitHub 签到预警]\n时间: ${startedAt}\n当前只配置了 ${CONFIG.accounts.length}/10 个账号\n缺少的 Secrets: ${Array.from({ length: 10 }, (_, i) => `USER_${i + 1}`).filter((k) => !process.env[k]).join(', ')}\n\n本次先按现有账号继续执行，便于从 Telegram 汇总里确认已配置的账号列表。`;
     await safeNotify(msg);
-    throw new Error(`账号数量不足：${CONFIG.accounts.length}/10`);
   }
 
   const browser = await chromium.launch({ headless: true });
