@@ -2,12 +2,13 @@ name: One Idkey Signin
 
 on:
   schedule:
-    - cron: '0 1 * * *' # 每天 UTC 1:00 (北京时间 9:00)
-  workflow_dispatch: # 支持手动触发
+    - cron: '25 1 * * *' # GitHub cron 有漂移，设为 UTC 01:25（北京时间约 09:25+）
+  workflow_dispatch:
 
 jobs:
   signin:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -16,14 +17,33 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+
+      - name: Prepare package.json
+        run: |
+          if [ ! -f package.json ]; then
+            npm init -y
+          fi
 
       - name: Install dependencies
-        run: |
-          npm init -y
-          npm install playwright axios
+        run: npm install playwright axios
 
       - name: Install Playwright Browsers
         run: npx playwright install chromium --with-deps
 
       - name: Run Signin Script
+        env:
+          PASSWORD: ${{ secrets.PASSWORD }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          USER_1: ${{ secrets.USER_1 }}
+          USER_2: ${{ secrets.USER_2 }}
+          USER_3: ${{ secrets.USER_3 }}
+          USER_4: ${{ secrets.USER_4 }}
+          USER_5: ${{ secrets.USER_5 }}
+          USER_6: ${{ secrets.USER_6 }}
+          USER_7: ${{ secrets.USER_7 }}
+          USER_8: ${{ secrets.USER_8 }}
+          USER_9: ${{ secrets.USER_9 }}
+          USER_10: ${{ secrets.USER_10 }}
         run: node one_idkey_signin.js
