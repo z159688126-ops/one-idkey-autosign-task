@@ -179,18 +179,18 @@ function buildSummary(results, startedAt) {
 
   if (ok.length) {
     lines.push('✅ 成功账号');
-    for (const item of ok) {
-      lines.push(`- ${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
-    }
-    lines.push('');
+    ok.forEach((item, index) => {
+      lines.push(`${index + 1}. ${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
+      lines.push('');
+    });
   }
 
   if (fail.length) {
     lines.push('❌ 失败账号');
-    for (const item of fail) {
-      lines.push(`- ${item.username} | ${item.error}`);
-    }
-    lines.push('');
+    fail.forEach((item, index) => {
+      lines.push(`${index + 1}. ${item.username} | ${item.error}`);
+      lines.push('');
+    });
   }
 
   return lines.join('\n').trim();
