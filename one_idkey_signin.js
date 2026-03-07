@@ -5,10 +5,7 @@ const accountNames = Array.from({ length: 10 }, (_, i) => process.env[`USER_${i 
   (u) => u && u !== 'undefined'
 );
 
-const passwordFor = (username) =>
-  username === 'zengfei19880126@gmail.com'
-    ? (process.env.PASSWORD_SPECIAL || 'Zengfei521.Zengfei521.')
-    : (process.env.PASSWORD || 'Zengfei521.');
+const passwordFor = () => process.env.PASSWORD || 'Zengfei521.';
 
 const CONFIG = {
   url: 'https://one.idkey.cc/',
