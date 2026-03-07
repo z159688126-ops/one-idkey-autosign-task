@@ -168,6 +168,7 @@ async function clickSignin(page) {
 function buildSummary(results, startedAt) {
   const success = results.filter((r) => r.status === 'success');
   const retrySuccess = results.filter((r) => r.status === 'retry-success');
+  const already = results.filter((r) => r.status === 'already');
   const uncertain = results.filter((r) => r.status === 'uncertain');
   const fail = results.filter((r) => r.status === 'failed');
   const lines = [
@@ -176,6 +177,7 @@ function buildSummary(results, startedAt) {
     `账户数: ${results.length}/10`,
     `成功: ${success.length}`,
     `补签成功: ${retrySuccess.length}`,
+    `已签过: ${already.length}`,
     `异常: ${uncertain.length}`,
     `失败: ${fail.length}`,
     ''
@@ -192,6 +194,7 @@ function buildSummary(results, startedAt) {
 
   pushGroup('✅ 成功账号', success, (item) => `${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
   pushGroup('🔁 重试后成功', retrySuccess, (item) => `${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
+  pushGroup('🟦 已签过账号', already, (item) => `${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
   pushGroup('⚠️ 异常账号', uncertain, (item) => `${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
   pushGroup('❌ 失败账号', fail, (item) => `${item.username} | ${item.error}`);
 
@@ -237,14 +240,15 @@ function buildSummary(results, startedAt) {
       const after = await getPoints(page);
       const changed = before.s !== after.s || before.v !== after.v;
 
-      let status = 'uncertain';
-      let note = '未见签到按钮，可能今日已签';
+      let status = 'already';
+      let note = '未见签到按钮，今日大概率已签到';
 
       if (clicked && changed) {
         status = attempt === 1 ? 'success' : 'retry-success';
         note = attempt === 1 ? '积分已变化' : '重试后积分已变化';
       } else if (clicked && !changed) {
-        note = '已点击签到但积分未变化';
+        status = 'already';
+        note = '已点击签到但积分未变化，今日大概率已签到';
       }
 
       return { status, username: acc.username, before, after, note, clicked, changed, attempt };
@@ -265,8 +269,8 @@ function buildSummary(results, startedAt) {
           const retryResult = await runOneAccount(acc, 2);
           result = retryResult.status === 'retry-success' ? retryResult : {
             ...retryResult,
-            status: retryResult.status === 'success' ? 'retry-success' : 'uncertain',
-            note: retryResult.changed ? '重试后积分已变化' : '重试后仍未见积分变化/按钮'
+            status: retryResult.status === 'success' ? 'retry-success' : (retryResult.status === 'already' ? 'already' : 'uncertain'),
+            note: retryResult.changed ? '重试后积分已变化' : (retryResult.status === 'already' ? retryResult.note : '重试后仍未见积分变化/按钮')
           };
         }
 

@@ -37,6 +37,7 @@ jobs:
       - name: Run Signin Script
         env:
           PASSWORD: ${{ secrets.PASSWORD }}
+          PASSWORD_SPECIAL: ${{ secrets.PASSWORD_SPECIAL }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           USER_1: ${{ secrets.USER_1 }}
