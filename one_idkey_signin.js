@@ -17,10 +17,12 @@ const CONFIG = {
   accounts: accountNames.map((username) => ({ username, password: passwordFor(username) })),
   botToken: process.env.BOT_TOKEN,
   chatId: process.env.CHAT_ID,
-  evidenceDir: path.join(process.cwd(), 'artifacts')
+  evidenceDir: path.join(process.cwd(), 'artifacts'),
+  stateDir: path.join(process.cwd(), 'state')
 };
 
 fs.mkdirSync(CONFIG.evidenceDir, { recursive: true });
+fs.mkdirSync(CONFIG.stateDir, { recursive: true });
 
 function now() {
   return new Date().toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
@@ -82,6 +84,23 @@ function safeName(input) {
   return String(input || 'unknown').replace(/[^a-zA-Z0-9._-]+/g, '_');
 }
 
+function shuffle(array) {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function randomDelay(minMs = 2500, maxMs = 9000) {
+  return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+}
+
+function statePathFor(username) {
+  return path.join(CONFIG.stateDir, `${safeName(username)}.json`);
+}
+
 async function detectCloudflareChallenge(page) {
   return await page.evaluate(() => {
     const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
@@ -139,6 +158,13 @@ async function openLogin(page) {
   }
 
   throw new Error('登录弹窗未成功打开');
+}
+
+async function hasLoggedInView(page) {
+  return await page.evaluate(() => {
+    const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+    return /退出|登出|购买积分|兑换积分|端口实时通过状态|成功|失败/.test(text) || !!document.getElementById('displayStudentPoints') || !!document.getElementById('displayVeteranPoints');
+  }).catch(() => false);
 }
 
 async function login(page, acc) {
@@ -277,18 +303,38 @@ function buildSummary(results, startedAt) {
 
   const browser = await chromium.launch({ headless: true });
   const results = [];
+  const accounts = shuffle(CONFIG.accounts);
 
   try {
-    for (const acc of CONFIG.accounts) {
-      const context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-      });
+    for (const acc of accounts) {
+      const storageStatePath = statePathFor(acc.username);
+      const contextOptions = {
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        viewport: { width: 1366, height: 768 },
+        locale: 'zh-CN',
+        timezoneId: 'Asia/Shanghai'
+      };
+      if (fs.existsSync(storageStatePath)) {
+        contextOptions.storageState = storageStatePath;
+      }
+      const context = await browser.newContext(contextOptions);
       const page = await context.newPage();
 
       try {
         console.log(`正在为账号 ${acc.username} 执行签到...`);
         await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: 90000 });
-        await login(page, acc);
+
+        let reusedState = false;
+        if (fs.existsSync(storageStatePath)) {
+          await page.waitForTimeout(randomDelay(1500, 4000));
+          reusedState = await hasLoggedInView(page);
+        }
+
+        if (!reusedState) {
+          await login(page, acc);
+          await context.storageState({ path: storageStatePath }).catch(() => {});
+          await page.waitForTimeout(randomDelay(2500, 6000));
+        }
 
         const before = await getPoints(page);
         const clicked = await clickSignin(page);
@@ -308,7 +354,8 @@ function buildSummary(results, startedAt) {
         const changed = before.s !== after.s || before.v !== after.v;
         const note = clicked ? (changed ? '签到成功，积分已变化' : '已点击签到但积分未变化') : '未见签到按钮，可能今日已签到';
 
-        results.push({ ok: true, changed, username: acc.username, before, after, note });
+        await context.storageState({ path: storageStatePath }).catch(() => {});
+        results.push({ ok: true, changed, username: acc.username, before, after, note, reusedState });
       } catch (error) {
         console.error(`${acc.username} 失败:`, error.message);
         const isCfBlocked = /Cloudflare 安全质询|CF|challenge/i.test(error.message || '');
@@ -319,6 +366,7 @@ function buildSummary(results, startedAt) {
           break;
         }
       } finally {
+        await page.waitForTimeout(randomDelay(3000, 8000)).catch(() => {});
         await page.close();
         await context.close();
       }

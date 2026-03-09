@@ -17,6 +17,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Restore signin state
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: one-idkey-state-${{ github.ref_name }}
+          restore-keys: |
+            one-idkey-state-
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -52,10 +60,19 @@ jobs:
           USER_10: ${{ secrets.USER_10 }}
         run: node one_idkey_signin.js
 
+      - name: Save signin state cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: one-idkey-state-${{ github.ref_name }}
+
       - name: Upload signin artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: one-idkey-signin-artifacts
-          path: artifacts/
+          path: |
+            artifacts/
+            state/
           if-no-files-found: ignore
