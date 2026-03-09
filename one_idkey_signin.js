@@ -5,7 +5,10 @@ const accountNames = Array.from({ length: 10 }, (_, i) => process.env[`USER_${i 
   (u) => u && u !== 'undefined'
 );
 
-const passwordFor = () => process.env.PASSWORD || 'Zengfei521.';
+const passwordFor = (username) =>
+  username === 'zengfei19880126@gmail.com'
+    ? (process.env.PASSWORD_SPECIAL || 'Zengfei521.Zengfei521.')
+    : (process.env.PASSWORD || 'Zengfei521.');
 
 const CONFIG = {
   url: 'https://one.idkey.cc/',
@@ -85,7 +88,7 @@ async function openLogin(page) {
     if (loginEl) loginEl.click();
   });
 
-  const userSelectors = ['#loginUser', 'input[placeholder*="用户名"]', 'input[placeholder*="邮箱"]', 'input[type="text"]'];
+  const userSelectors = ['#loginUser', 'input[placeholder*="用户"]', 'input[placeholder*="邮箱"]', 'input[type="text"]'];
   for (const sel of userSelectors) {
     const loc = page.locator(sel).first();
     if (await loc.count()) {
@@ -99,34 +102,10 @@ async function openLogin(page) {
   throw new Error('登录弹窗未成功打开');
 }
 
-async function waitForDashboard(page, timeout = 20000) {
-  const started = Date.now();
-  while (Date.now() - started < timeout) {
-    const state = await page.evaluate(() => {
-      const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
-      const hasPoints = !!document.getElementById('displayStudentPoints') || !!document.getElementById('displayVeteranPoints') || /学生积分|老兵积分/.test(text);
-      const hasSignin = /签到/.test(text);
-      const hasLoginButton = /登录|登入/.test(text);
-      const hasLogout = /退出|登出/.test(text);
-      return { hasPoints, hasSignin, hasLoginButton, hasLogout, text: text.slice(0, 600) };
-    }).catch(() => ({ hasPoints: false, hasSignin: false, hasLoginButton: false, hasLogout: false, text: '' }));
-
-    if (state.hasPoints || state.hasSignin || state.hasLogout) return state;
-    await page.waitForTimeout(1500);
-  }
-
-  const finalState = await page.evaluate(() => {
-    const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
-    return { hasPoints: /学生积分|老兵积分/.test(text), hasSignin: /签到/.test(text), hasLoginButton: /登录|登入/.test(text), hasLogout: /退出|登出/.test(text), text: text.slice(0, 600) };
-  }).catch(() => ({ hasPoints: false, hasSignin: false, hasLoginButton: false, hasLogout: false, text: '' }));
-
-  return finalState;
-}
-
 async function login(page, acc) {
   await openLogin(page);
 
-  const userField = page.locator('#loginUser, input[placeholder*="用户名"], input[placeholder*="邮箱"], input[type="text"]').first();
+  const userField = page.locator('#loginUser, input[placeholder*="用户"], input[placeholder*="邮箱"], input[type="text"]').first();
   const passField = page.locator('#loginPass, input[type="password"]').first();
 
   await userField.fill(acc.username);
@@ -143,16 +122,7 @@ async function login(page, acc) {
     }
   });
 
-  await page.waitForTimeout(6000);
-  await page.reload({ waitUntil: 'networkidle', timeout: 90000 }).catch(() => {});
-  await page.waitForTimeout(4000);
-
-  const dashboard = await waitForDashboard(page, 18000);
-  if (!dashboard.hasPoints && !dashboard.hasSignin && !dashboard.hasLogout) {
-    throw new Error(`登录后未进入有效页面: ${dashboard.text || 'EMPTY'}`);
-  }
-
-  return dashboard;
+  await page.waitForTimeout(12000);
 }
 
 async function clickSignin(page) {
@@ -196,37 +166,43 @@ async function clickSignin(page) {
 }
 
 function buildSummary(results, startedAt) {
-  const success = results.filter((r) => r.status === 'success');
-  const retrySuccess = results.filter((r) => r.status === 'retry-success');
-  const already = results.filter((r) => r.status === 'already');
-  const uncertain = results.filter((r) => r.status === 'uncertain');
-  const fail = results.filter((r) => r.status === 'failed');
+  const success = results.filter((r) => r.ok && r.changed);
+  const noChange = results.filter((r) => r.ok && !r.changed);
+  const fail = results.filter((r) => !r.ok);
+
   const lines = [
     '[GitHub 签到汇总]',
     `时间: ${startedAt}`,
     `账户数: ${results.length}/10`,
-    `成功: ${success.length}`,
-    `补签成功: ${retrySuccess.length}`,
-    `已签过: ${already.length}`,
-    `异常: ${uncertain.length}`,
+    `签到成功: ${success.length}`,
+    `未见积分变化: ${noChange.length}`,
     `失败: ${fail.length}`,
     ''
   ];
 
-  const pushGroup = (title, items, formatter) => {
-    if (!items.length) return;
-    lines.push(title);
-    items.forEach((item, index) => {
-      lines.push(`${index + 1}. ${formatter(item)}`);
-      lines.push('');
-    });
-  };
+  if (success.length) {
+    lines.push('✅ 签到成功账号');
+    for (const item of success) {
+      lines.push(`- ${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖 ${item.before.v} -> ${item.after.v} | 签到成功，积分已变化`);
+    }
+    lines.push('');
+  }
 
-  pushGroup('✅ 成功账号', success, (item) => `${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
-  pushGroup('🔁 重试后成功', retrySuccess, (item) => `${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
-  pushGroup('🟦 已签过账号', already, (item) => `${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
-  pushGroup('⚠️ 异常账号', uncertain, (item) => `${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖️ ${item.before.v} -> ${item.after.v} | ${item.note}`);
-  pushGroup('❌ 失败账号', fail, (item) => `${item.username} | ${item.error}`);
+  if (noChange.length) {
+    lines.push('🟦 未见积分变化账号');
+    for (const item of noChange) {
+      lines.push(`- ${item.username} | 🎓 ${item.before.s} -> ${item.after.s} | 🎖 ${item.before.v} -> ${item.after.v} | ${item.note}`);
+    }
+    lines.push('');
+  }
+
+  if (fail.length) {
+    lines.push('❌ 失败账号');
+    for (const item of fail) {
+      lines.push(`- ${item.username} | ${item.error}`);
+    }
+    lines.push('');
+  }
 
   return lines.join('\n').trim();
 }
@@ -235,88 +211,50 @@ function buildSummary(results, startedAt) {
   const startedAt = now();
 
   if (CONFIG.accounts.length !== 10) {
-    const msg = `[GitHub 签到预警]\n时间: ${startedAt}\n当前只配置了 ${CONFIG.accounts.length}/10 个账号\n缺少的 Secrets: ${Array.from({ length: 10 }, (_, i) => `USER_${i + 1}`).filter((k) => !process.env[k]).join(', ')}\n\n本次先按现有账号继续执行，便于从 Telegram 汇总里确认已配置的账号列表。`;
+    const msg = `[GitHub 签到预警]\n时间: ${startedAt}\n当前只配置了 ${CONFIG.accounts.length}/10 个账号\n缺少 Secrets: ${Array.from({ length: 10 }, (_, i) => `USER_${i + 1}`).filter((k) => !process.env[k]).join(', ')}\n\n本次先按现有账号继续执行，便于从 Telegram 汇总里确认已配置的账号列表。`;
     await safeNotify(msg);
   }
 
   const browser = await chromium.launch({ headless: true });
   const results = [];
 
-  async function runOneAccount(acc, attempt = 1) {
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-    });
-    const page = await context.newPage();
-
-    try {
-      console.log(`正在为账号 ${acc.username} 执行签到... attempt=${attempt}`);
-      await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: 90000 });
-      const dashboard = await login(page, acc);
-
-      const before = await getPoints(page);
-      const clicked = await clickSignin(page);
-
-      await page.waitForTimeout(clicked ? 12000 : 5000);
-      if (clicked) {
-        await page.evaluate(() => {
-          const ok = Array.from(document.querySelectorAll('button, a')).find((el) => /确定|OK|知道了|提交/.test(el.innerText || ''));
-          if (ok) ok.click();
-        }).catch(() => {});
-        await page.waitForTimeout(3000);
-        await page.reload({ waitUntil: 'networkidle', timeout: 90000 }).catch(() => {});
-        await page.waitForTimeout(5000);
-      }
-
-      const after = await getPoints(page);
-      const changed = before.s !== after.s || before.v !== after.v;
-      const hasKnownBefore = before.s !== '?' && before.v !== '?';
-      const hasKnownAfter = after.s !== '?' && after.v !== '?';
-      const hasReadablePoints = hasKnownBefore && hasKnownAfter && !(before.s === '0' && before.v === '0' && after.s === '0' && after.v === '0');
-
-      let status = 'uncertain';
-      let note = '未确认签到成功：未点到按钮或积分区未可靠识别';
-
-      if (clicked && changed) {
-        status = attempt === 1 ? 'success' : 'retry-success';
-        note = attempt === 1 ? '签到成功，积分已变化' : '重试后签到成功，积分已变化';
-      } else if (clicked && hasReadablePoints && !changed) {
-        status = 'already';
-        note = '已点击签到但积分未变化，今日大概率已签到';
-      } else if (!clicked && hasReadablePoints) {
-        status = 'already';
-        note = '未见签到按钮，且积分区可正常识别，今日大概率已签到';
-      } else if (clicked && !changed) {
-        status = 'uncertain';
-        note = '已点击签到，但积分未变化且积分区识别不可靠';
-      }
-
-      return { status, username: acc.username, before, after, note, clicked, changed, attempt, hasReadablePoints, dashboard };
-    } finally {
-      await page.close();
-      await context.close();
-    }
-  }
-
   try {
     for (const acc of CONFIG.accounts) {
-      try {
-        let result = await runOneAccount(acc, 1);
+      const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+      });
+      const page = await context.newPage();
 
-        if (result.status === 'uncertain') {
-          console.log(`${acc.username} 首次结果不确定，开始自动重试一次...`);
-          await new Promise((resolve) => setTimeout(resolve, 4000));
-          const retryResult = await runOneAccount(acc, 2);
-          result = retryResult.status === 'retry-success' ? retryResult : {
-            ...retryResult,
-            status: retryResult.status === 'success' ? 'retry-success' : (retryResult.status === 'already' ? 'already' : 'uncertain'),
-            note: retryResult.changed ? '重试后积分已变化' : (retryResult.status === 'already' ? retryResult.note : '重试后仍未见积分变化/按钮')
-          };
+      try {
+        console.log(`正在为账号 ${acc.username} 执行签到...`);
+        await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: 90000 });
+        await login(page, acc);
+
+        const before = await getPoints(page);
+        const clicked = await clickSignin(page);
+
+        await page.waitForTimeout(clicked ? 12000 : 5000);
+        if (clicked) {
+          await page.evaluate(() => {
+            const ok = Array.from(document.querySelectorAll('button, a')).find((el) => /确定|OK|知道了|提交/.test(el.innerText || ''));
+            if (ok) ok.click();
+          }).catch(() => {});
+          await page.waitForTimeout(3000);
+          await page.reload({ waitUntil: 'networkidle', timeout: 90000 }).catch(() => {});
+          await page.waitForTimeout(5000);
         }
 
-        results.push(result);
+        const after = await getPoints(page);
+        const changed = before.s !== after.s || before.v !== after.v;
+        const note = clicked ? (changed ? '签到成功，积分已变化' : '已点击签到但积分未变化') : '未见签到按钮，可能今日已签到';
+
+        results.push({ ok: true, changed, username: acc.username, before, after, note });
       } catch (error) {
         console.error(`${acc.username} 失败:`, error.message);
-        results.push({ status: 'failed', username: acc.username, error: error.message });
+        results.push({ ok: false, changed: false, username: acc.username, error: error.message });
+      } finally {
+        await page.close();
+        await context.close();
       }
     }
   } finally {
@@ -326,9 +264,8 @@ function buildSummary(results, startedAt) {
   const summary = buildSummary(results, startedAt);
   await safeNotify(summary);
 
-  const failedCount = results.filter((r) => r.status === 'failed').length;
-  const uncertainCount = results.filter((r) => r.status === 'uncertain').length;
-  if (failedCount > 0 || uncertainCount > 0) {
-    throw new Error(`签到存在异常账号：failed=${failedCount}, uncertain=${uncertainCount}`);
+  const failedCount = results.filter((r) => !r.ok).length;
+  if (failedCount > 0) {
+    throw new Error(`签到存在失败账号: ${failedCount}`);
   }
 })();
