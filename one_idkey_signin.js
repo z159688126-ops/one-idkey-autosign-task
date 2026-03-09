@@ -272,7 +272,7 @@ function buildSummary(results, startedAt) {
   if (cfBlocked.length) {
     lines.push('🟨 CF 拦截账号');
     for (const item of cfBlocked) {
-      lines.push(`- ${item.username} | 检测到 Cloudflare 安全质询，已保存取证并停止`);
+      lines.push(`- ${item.username} | 检测到 Cloudflare 安全质询，已保存取证并停止；请人工过验证后重新运行任务`);
     }
     lines.push('');
   }
@@ -361,7 +361,7 @@ function buildSummary(results, startedAt) {
         const isCfBlocked = /Cloudflare 安全质询|CF|challenge/i.test(error.message || '');
         results.push({ ok: false, changed: false, username: acc.username, error: error.message, cfBlocked: isCfBlocked });
         if (isCfBlocked) {
-          const alert = `[GitHub 签到告警]\n时间: ${now()}\n账号: ${acc.username}\n状态: 检测到 Cloudflare 安全质询\n处理: 已保存取证并停止本次任务\n说明: 请到 GitHub Actions artifacts 查看截图/HTML/JSON 取证文件。`;
+          const alert = `[GitHub 签到告警]\n时间: ${now()}\n账号: ${acc.username}\n状态: 检测到 Cloudflare 安全质询\n处理: 已保存取证并停止本次任务\n\n下一步请这样做：\n1. 打开签到网站并人工完成验证/登录： https://one.idkey.cc/\n2. 验证完成后，重新运行 GitHub Actions 里的签到工作流\n3. 如需排查细节，请到本次 run 的 artifacts 查看截图/HTML/JSON 取证文件\n\n注意：当前这次已停止，不能原地继续，只能在你人工过验证后重新运行。`;
           await safeNotify(alert);
           break;
         }
