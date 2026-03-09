@@ -214,6 +214,7 @@ function buildSummary(results, startedAt) {
   const success = results.filter((r) => r.ok && r.changed);
   const noChange = results.filter((r) => r.ok && !r.changed);
   const fail = results.filter((r) => !r.ok);
+  const cfBlocked = results.filter((r) => r.cfBlocked);
 
   const lines = [
     '[GitHub 签到汇总]',
@@ -221,6 +222,7 @@ function buildSummary(results, startedAt) {
     `账户数: ${results.length}/10`,
     `签到成功: ${success.length}`,
     `未见积分变化: ${noChange.length}`,
+    `CF 拦截: ${cfBlocked.length}`,
     `失败: ${fail.length}`,
     ''
   ];
@@ -241,12 +243,23 @@ function buildSummary(results, startedAt) {
     lines.push('');
   }
 
+  if (cfBlocked.length) {
+    lines.push('🟨 CF 拦截账号');
+    for (const item of cfBlocked) {
+      lines.push(`- ${item.username} | 检测到 Cloudflare 安全质询，已保存取证并停止`);
+    }
+    lines.push('');
+  }
+
   if (fail.length) {
     lines.push('❌ 失败账号');
     for (const item of fail) {
       lines.push(`- ${item.username} | ${item.error}`);
     }
     lines.push('');
+  }
+
+  if (cfBlocked.length || fail.length) {
     lines.push('已保存取证产物到 workflow artifacts，可据此继续修复。');
     lines.push('');
   }
@@ -298,7 +311,13 @@ function buildSummary(results, startedAt) {
         results.push({ ok: true, changed, username: acc.username, before, after, note });
       } catch (error) {
         console.error(`${acc.username} 失败:`, error.message);
-        results.push({ ok: false, changed: false, username: acc.username, error: error.message });
+        const isCfBlocked = /Cloudflare 安全质询|CF|challenge/i.test(error.message || '');
+        results.push({ ok: false, changed: false, username: acc.username, error: error.message, cfBlocked: isCfBlocked });
+        if (isCfBlocked) {
+          const alert = `[GitHub 签到告警]\n时间: ${now()}\n账号: ${acc.username}\n状态: 检测到 Cloudflare 安全质询\n处理: 已保存取证并停止本次任务\n说明: 请到 GitHub Actions artifacts 查看截图/HTML/JSON 取证文件。`;
+          await safeNotify(alert);
+          break;
+        }
       } finally {
         await page.close();
         await context.close();
@@ -312,6 +331,10 @@ function buildSummary(results, startedAt) {
   await safeNotify(summary);
 
   const failedCount = results.filter((r) => !r.ok).length;
+  const cfBlockedCount = results.filter((r) => r.cfBlocked).length;
+  if (cfBlockedCount > 0) {
+    throw new Error(`签到被 Cloudflare 拦截: ${cfBlockedCount}`);
+  }
   if (failedCount > 0) {
     throw new Error(`签到存在失败账号: ${failedCount}`);
   }
