@@ -236,19 +236,28 @@ function buildSummary(results, startedAt) {
 
       const after = await getPoints(page);
       const changed = before.s !== after.s || before.v !== after.v;
+      const hasKnownBefore = before.s !== '?' && before.v !== '?';
+      const hasKnownAfter = after.s !== '?' && after.v !== '?';
+      const hasReadablePoints = hasKnownBefore && hasKnownAfter && !(before.s === '0' && before.v === '0' && after.s === '0' && after.v === '0');
 
-      let status = 'already';
-      let note = '未见签到按钮，今日大概率已签到';
+      let status = 'uncertain';
+      let note = '未确认签到成功：未点到按钮或积分区未可靠识别';
 
       if (clicked && changed) {
         status = attempt === 1 ? 'success' : 'retry-success';
-        note = attempt === 1 ? '积分已变化' : '重试后积分已变化';
-      } else if (clicked && !changed) {
+        note = attempt === 1 ? '签到成功，积分已变化' : '重试后签到成功，积分已变化';
+      } else if (clicked && hasReadablePoints && !changed) {
         status = 'already';
         note = '已点击签到但积分未变化，今日大概率已签到';
+      } else if (!clicked && hasReadablePoints) {
+        status = 'already';
+        note = '未见签到按钮，且积分区可正常识别，今日大概率已签到';
+      } else if (clicked && !changed) {
+        status = 'uncertain';
+        note = '已点击签到，但积分未变化且积分区识别不可靠';
       }
 
-      return { status, username: acc.username, before, after, note, clicked, changed, attempt };
+      return { status, username: acc.username, before, after, note, clicked, changed, attempt, hasReadablePoints };
     } finally {
       await page.close();
       await context.close();
