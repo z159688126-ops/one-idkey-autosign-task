@@ -99,6 +99,30 @@ async function openLogin(page) {
   throw new Error('登录弹窗未成功打开');
 }
 
+async function waitForDashboard(page, timeout = 20000) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    const state = await page.evaluate(() => {
+      const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+      const hasPoints = !!document.getElementById('displayStudentPoints') || !!document.getElementById('displayVeteranPoints') || /学生积分|老兵积分/.test(text);
+      const hasSignin = /签到/.test(text);
+      const hasLoginButton = /登录|登入/.test(text);
+      const hasLogout = /退出|登出/.test(text);
+      return { hasPoints, hasSignin, hasLoginButton, hasLogout, text: text.slice(0, 600) };
+    }).catch(() => ({ hasPoints: false, hasSignin: false, hasLoginButton: false, hasLogout: false, text: '' }));
+
+    if (state.hasPoints || state.hasSignin || state.hasLogout) return state;
+    await page.waitForTimeout(1500);
+  }
+
+  const finalState = await page.evaluate(() => {
+    const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+    return { hasPoints: /学生积分|老兵积分/.test(text), hasSignin: /签到/.test(text), hasLoginButton: /登录|登入/.test(text), hasLogout: /退出|登出/.test(text), text: text.slice(0, 600) };
+  }).catch(() => ({ hasPoints: false, hasSignin: false, hasLoginButton: false, hasLogout: false, text: '' }));
+
+  return finalState;
+}
+
 async function login(page, acc) {
   await openLogin(page);
 
@@ -119,7 +143,16 @@ async function login(page, acc) {
     }
   });
 
-  await page.waitForTimeout(12000);
+  await page.waitForTimeout(6000);
+  await page.reload({ waitUntil: 'networkidle', timeout: 90000 }).catch(() => {});
+  await page.waitForTimeout(4000);
+
+  const dashboard = await waitForDashboard(page, 18000);
+  if (!dashboard.hasPoints && !dashboard.hasSignin && !dashboard.hasLogout) {
+    throw new Error(`登录后未进入有效页面: ${dashboard.text || 'EMPTY'}`);
+  }
+
+  return dashboard;
 }
 
 async function clickSignin(page) {
@@ -218,7 +251,7 @@ function buildSummary(results, startedAt) {
     try {
       console.log(`正在为账号 ${acc.username} 执行签到... attempt=${attempt}`);
       await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: 90000 });
-      await login(page, acc);
+      const dashboard = await login(page, acc);
 
       const before = await getPoints(page);
       const clicked = await clickSignin(page);
@@ -257,7 +290,7 @@ function buildSummary(results, startedAt) {
         note = '已点击签到，但积分未变化且积分区识别不可靠';
       }
 
-      return { status, username: acc.username, before, after, note, clicked, changed, attempt, hasReadablePoints };
+      return { status, username: acc.username, before, after, note, clicked, changed, attempt, hasReadablePoints, dashboard };
     } finally {
       await page.close();
       await context.close();
