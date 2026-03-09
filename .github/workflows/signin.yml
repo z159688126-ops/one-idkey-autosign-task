@@ -37,6 +37,7 @@ jobs:
       - name: Run Signin Script
         env:
           PASSWORD: ${{ secrets.PASSWORD }}
+          PASSWORD_SPECIAL: ${{ secrets.PASSWORD_SPECIAL }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           USER_1: ${{ secrets.USER_1 }}
@@ -50,3 +51,11 @@ jobs:
           USER_9: ${{ secrets.USER_9 }}
           USER_10: ${{ secrets.USER_10 }}
         run: node one_idkey_signin.js
+
+      - name: Upload signin artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: one-idkey-signin-artifacts
+          path: artifacts/
+          if-no-files-found: ignore

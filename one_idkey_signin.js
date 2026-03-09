@@ -1,5 +1,7 @@
 const { chromium } = require('playwright');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 
 const accountNames = Array.from({ length: 10 }, (_, i) => process.env[`USER_${i + 1}`]).filter(
   (u) => u && u !== 'undefined'
@@ -14,8 +16,11 @@ const CONFIG = {
   url: 'https://one.idkey.cc/',
   accounts: accountNames.map((username) => ({ username, password: passwordFor(username) })),
   botToken: process.env.BOT_TOKEN,
-  chatId: process.env.CHAT_ID
+  chatId: process.env.CHAT_ID,
+  evidenceDir: path.join(process.cwd(), 'artifacts')
 };
+
+fs.mkdirSync(CONFIG.evidenceDir, { recursive: true });
 
 function now() {
   return new Date().toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
@@ -73,6 +78,40 @@ async function getPoints(page) {
   }
 }
 
+function safeName(input) {
+  return String(input || 'unknown').replace(/[^a-zA-Z0-9._-]+/g, '_');
+}
+
+async function detectCloudflareChallenge(page) {
+  return await page.evaluate(() => {
+    const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+    const html = document.documentElement?.outerHTML || '';
+    const frames = Array.from(document.querySelectorAll('iframe')).map((f) => ({
+      title: f.getAttribute('title') || '',
+      src: f.getAttribute('src') || ''
+    }));
+    const hasChallenge = /cloudflare|安全质询|验证您是真人|verify you are human|turnstile/i.test(text + ' ' + html + ' ' + JSON.stringify(frames));
+    return { hasChallenge, text: text.slice(0, 2000), frames };
+  }).catch(() => ({ hasChallenge: false, text: '', frames: [] }));
+}
+
+async function saveEvidence(page, username, stage, extra = {}) {
+  const base = `${new Date().toISOString().replace(/[.:]/g, '-')}_${safeName(username)}_${safeName(stage)}`;
+  const pngPath = path.join(CONFIG.evidenceDir, `${base}.png`);
+  const htmlPath = path.join(CONFIG.evidenceDir, `${base}.html`);
+  const jsonPath = path.join(CONFIG.evidenceDir, `${base}.json`);
+  const bodyText = await page.locator('body').innerText().catch(() => '');
+  const html = await page.content().catch(() => '');
+  const title = await page.title().catch(() => '');
+  const url = page.url();
+  const challenge = await detectCloudflareChallenge(page);
+  const buttons = await page.evaluate(() => Array.from(document.querySelectorAll('button,a,input[type="submit"]')).map(el => ({ text: (el.innerText || el.value || '').replace(/\s+/g, ' ').trim(), tag: el.tagName, href: el.getAttribute('href') || '' })).filter(x => x.text).slice(0, 80)).catch(() => []);
+  await page.screenshot({ path: pngPath, fullPage: true }).catch(() => {});
+  fs.writeFileSync(htmlPath, html || '', 'utf8');
+  fs.writeFileSync(jsonPath, JSON.stringify({ title, url, bodyText: String(bodyText).slice(0, 4000), challenge, buttons, extra }, null, 2), 'utf8');
+  return { pngPath, htmlPath, jsonPath, challenge };
+}
+
 async function openLogin(page) {
   await page.evaluate(() => {
     document.querySelectorAll('#maintenanceOverlay, .modal-backdrop').forEach((el) => el.remove());
@@ -104,12 +143,14 @@ async function openLogin(page) {
 
 async function login(page, acc) {
   await openLogin(page);
+  await saveEvidence(page, acc.username, 'login-modal-open');
 
   const userField = page.locator('#loginUser, input[placeholder*="用户"], input[placeholder*="邮箱"], input[type="text"]').first();
   const passField = page.locator('#loginPass, input[type="password"]').first();
 
   await userField.fill(acc.username);
   await passField.fill(acc.password);
+  await saveEvidence(page, acc.username, 'login-filled');
 
   const submit = page.locator('#authModal .btn-action, button:has-text("登录系统"), button:has-text("登录"), .btn-action').first();
   if (await submit.count()) {
@@ -123,6 +164,10 @@ async function login(page, acc) {
   });
 
   await page.waitForTimeout(12000);
+  const evidence = await saveEvidence(page, acc.username, 'after-login-submit');
+  if (evidence.challenge?.hasChallenge) {
+    throw new Error('检测到 Cloudflare 安全质询，GitHub Actions 无头环境被拦截');
+  }
 }
 
 async function clickSignin(page) {
@@ -201,6 +246,8 @@ function buildSummary(results, startedAt) {
     for (const item of fail) {
       lines.push(`- ${item.username} | ${item.error}`);
     }
+    lines.push('');
+    lines.push('已保存取证产物到 workflow artifacts，可据此继续修复。');
     lines.push('');
   }
 
